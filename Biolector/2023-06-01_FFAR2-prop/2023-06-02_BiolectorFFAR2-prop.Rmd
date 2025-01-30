@@ -1,0 +1,555 @@
+---
+title: "Biolector analysis"
+author: "Andrea Clausen Lind"
+date: "12/09/2023"
+output: html_notebook
+---
+
+## Load libraries
+```{r}
+library(tidyverse)
+library(viridis)
+library(hrbrthemes)
+library(broom)
+library(patchwork)
+library(ggridges)
+filter <- dplyr::filter
+```
+
+## Load data 
+```{r}
+df_data_filterset = 
+  read.csv2("2023-06-01_FFAR2.csv", sep = ",", skip = 11) #Remove first 11 rows as these contain information we dont need. Keep the filter setting data.
+
+df_data_raw = 
+  read.csv2("2023-06-01_FFAR2.csv", sep = ",", skip = 22, header = F) #Remove first 22 rows to extract the readout data. 
+
+df_meta =
+  read.csv("2023-06-01_Metadata.csv") %>% 
+  filter(strain != "")
+
+
+head(df_data_raw)
+head(df_meta)
+```
+
+##Begin by processing raw data
+```{r}
+df_data <- df_data_raw[3:nrow(df_data_raw),] #Start with processing of the measurement data
+
+
+df_data <- df_data %>% 
+  filter(V4 != "") %>%  #Remove empty rows in filterchannel
+  filter(!grepl("Cal",V4)) #Remove rows with Cal.Biomass measurements as we dont use these
+
+df_well_info <- df_data[2:nrow(df_data),1:4]
+
+sample_col <- 
+  df_well_info %>% 
+  mutate(sample = paste0(V1,"_",V4)) %>% 
+  pull(sample)
+
+sample_col <- c("time_h",sample_col)
+
+df_data$V4 <- sample_col
+
+df_data <- df_data[,-c(1:3)]
+
+df_data <- t(df_data) #Transpose data
+
+row.names(df_data) = NULL #Remove row names
+
+colnames(df_data) = df_data[1,] #Replace column names with row 1
+
+df_data = df_data[-1,] #remove row 1
+
+# tidy up into long format
+
+tbl_data <- 
+  df_data %>% 
+  as_tibble() %>% 
+  pivot_longer(cols = -time_h,names_to = "well_channel",values_to = "value") %>% 
+  separate(col = well_channel,into = c("well","channel"),sep = "_") %>% 
+  relocate(time_h, .after = channel)
+
+rm(df_data,df_well_info) #Remove things we will not use again
+gc()
+```
+
+##Extract well channel information
+```{r}
+df_channel <- 
+  df_data_filterset %>% 
+  select(FILTERSET,FILTERNAME,GAIN) %>% 
+  slice_head(n=6) %>% 
+  mutate(FILTERNAME = gsub(" .*","",FILTERNAME)) %>% # Removes weird tab chars
+  mutate(FILTERNAME = ifelse(grepl("UV",FILTERNAME),"UVGFP",FILTERNAME)) %>% 
+  mutate(channel_gain = paste(FILTERNAME,GAIN,sep = "_"))
+
+colnames(df_channel) <- c("channel","channel_name","gain","channel_gain")
+```
+
+##Merge with data
+```{r}
+tbl_data <- 
+  tbl_data %>% 
+  full_join(df_channel,by = "channel") %>% 
+  select(well,channel_gain,time_h,value)
+```
+
+##Join with metadata
+```{r}
+tbl_full <-
+  tbl_data %>%
+  full_join(df_meta, by = "well")
+
+#change column type
+tbl_full <-
+tbl_full %>% 
+  mutate(time_h = as.numeric(time_h)) %>% 
+  mutate(value = as.numeric(value)) %>% 
+    mutate(induction = factor(induction, levels = c("none", "1 nM Cmp1", "10 mM prop.", "10 mM prop. + 1 nM Cmp58", "1 uM Sc-pep")))
+
+```
+
+
+##Plot data overview
+```{r, fig.width=7}
+tbl_full %>% 
+  mutate(group_rep = paste0(strain, "_" ,replicate,"_",induction)) %>% 
+  ggplot(aes(x = time_h, y = value, color = induction, group = group_rep)) +
+           geom_line() +
+           facet_grid(vars(channel_gain), vars(strain))
+```
+
+##Correct for cell density 
+```{r}
+tbl_plot <-
+  tbl_full %>% 
+    pivot_wider(names_from = channel_gain, values_from = value) %>% 
+    mutate(GFP_ODnorm = GFP_100/Biomass_30) 
+
+#calculate mean and sd for each timepoint
+tbl_plot_mean <- 
+  tbl_plot %>% 
+  group_by(induction, strain, time_h) %>% 
+  mutate(GFP_ODnorm_mean = mean(GFP_ODnorm),
+         GFP_ODnorm_sd = sd(GFP_ODnorm)) %>% 
+  ungroup() %>% 
+  select(strain, induction, time_h, GFP_ODnorm, GFP_ODnorm_mean, GFP_ODnorm_sd) %>%
+  distinct()
+
+```
+
+##Plot overview
+```{r}
+
+  tbl_plot_mean %>% 
+  filter(time_h < 15) %>% 
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>%   
+  ggplot(aes(x = time_h, y = GFP_ODnorm_mean, group = group_rep2, color = induction)) + 
+  geom_ribbon(aes(ymin = GFP_ODnorm_mean - GFP_ODnorm_sd,
+                  ymax = GFP_ODnorm_mean + GFP_ODnorm_sd,
+                  fill = induction),
+              alpha =0.3,
+              color = NA) +
+  geom_line(size = 1) +
+  facet_wrap(vars(strain)) +
+  theme_bw() +
+  theme(aspect.ratio = 0.6) +
+  xlab("Time [h]") +
+  ylab("GFP / OD600 (a.u.)") 
+
+  tbl_plot_mean %>% 
+  filter(time_h < 15) %>% 
+  filter(strain != "ASC201") %>% 
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>%   
+  ggplot(aes(x = time_h, y = GFP_ODnorm_mean, group = group_rep2, color = induction)) + 
+  geom_ribbon(aes(ymin = GFP_ODnorm_mean - GFP_ODnorm_sd,
+                  ymax = GFP_ODnorm_mean + GFP_ODnorm_sd,
+                  fill = induction),
+              alpha =0.3,
+              color = NA) +
+  geom_line(size = 1) +
+  facet_wrap(vars(strain)) +
+  theme_bw() +
+  theme(aspect.ratio = 0.6) +
+  xlab("Time [h]") +
+  ylab("GFP intensity / OD600 [A.U.]") 
+
+
+
+```
+
+##GFP per OD peaks at 3 h, look further into this time point
+```{r}
+tbl_plot_mean_3h <- 
+    tbl_plot_mean %>% 
+  filter(time_h %in% c("3.04498"))
+
+p_bar_cont <-
+  tbl_plot_mean_3h %>% 
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>% 
+  mutate(group_rep2 = as.factor(group_rep2)) %>% 
+  ggplot(aes(x = strain, y=GFP_ODnorm_mean, fill = induction, group = induction)) +
+    geom_bar(
+    aes(fill = induction),
+    position = "dodge",
+    stat = "summary",
+    fun = "mean"
+  ) +
+  geom_point(
+    aes(y = GFP_ODnorm, 
+        group = induction),
+    size = 0.5,
+    color = "black",
+    position = position_dodge2(width = 0.9)
+  ) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  xlab("Strain") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Induction at 3 h of incubation")
+  
+p_bar_cont
+
+p_bar <-
+  tbl_plot_mean_3h %>% 
+  filter(strain != "ASC201") %>%
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>% 
+  mutate(group_rep2 = as.factor(group_rep2)) %>% 
+  ggplot(aes(x = strain, y=GFP_ODnorm_mean, fill = induction, group = induction)) +
+    geom_bar(
+    aes(fill = induction),
+    position = "dodge",
+    stat = "summary",
+    fun = "mean"
+  ) +
+  geom_point(
+    aes(y = GFP_ODnorm, 
+        group = induction),
+    size = 0.5,
+    color = "black",
+    position = position_dodge2(width = 0.9)
+  ) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  xlab("Strain") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Induction at 3 h of incubation")
+  
+p_bar
+
+# Plot ASC4G1-3
+p_bar_G1 <-
+  tbl_plot_mean_3h %>% 
+  filter(strain == "ASC4G1-3") %>%
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>% 
+  mutate(group_rep2 = as.factor(group_rep2)) %>% 
+  ggplot(aes(x = induction, y=GFP_ODnorm_mean, fill = induction)) +
+  geom_bar(aes(),
+           stat = "summary",
+           fun = "mean",
+           width = 0.5) +
+  geom_point(aes(y = GFP_ODnorm),
+          size = 0.5,
+          color = "black",
+          position = position_dodge2(width = 0.5)) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1, axis.text.x = element_text(angle = 45, hjust=1)) +
+  xlab("Induction") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Induction at 3 h of incubation for chimeric GPA1(i1)")
+  
+p_bar_G1
+
+```
+##Save plots
+```{r, eval=F}
+ggsave(p_bar_cont, filename = "Figures/BarDotCont.pdf",width = 6)
+ggsave(p_bar, filename = "Figures/BarDot.pdf",width = 6)
+ggsave(p_bar_G1, filename = "Figures/BarDot_G1.pdf",width = 5)
+```
+
+##Calculate significance
+```{r}
+#Extract number of strains and induction combinations
+all_strains <- 
+  tbl_plot_mean_3h %>% 
+  filter(strain != "ASC201") %>% 
+  filter(induction != "none") %>% 
+  mutate(induction = as.character(induction)) %>% 
+  mutate(strain_ind = paste0(strain,"_",induction)) %>% 
+  select(strain_ind, strain, induction) %>% 
+  distinct() 
+
+# Create result data frame
+df_res <- tibble(strain_ind = all_strains$strain_ind,
+                 pval.ttest = rep(NA,length(all_strains$strain_ind)),
+                 )
+
+# loop through all strains and run one-sided t-test
+for (i in 1:length(all_strains$strain_ind)) {
+  df_strain <- tbl_plot_mean_3h %>% 
+    filter(strain != "ASC201") %>% 
+    mutate(induction = as.character(induction)) %>% 
+    filter(strain == all_strains$strain[i])
+  
+  df_induc <- 
+    df_strain %>% 
+    filter(induction %in% c("none",all_strains$induction[i])) %>% 
+    mutate(induction = as.factor(induction)) %>%
+    group_by(induction) 
+
+  #paired t-test
+  df_ttest <- 
+    as_tibble(df_induc) %>%
+    summarize(tidy(t.test(
+      GFP_ODnorm~induction, 
+      paired=TRUE, 
+      conf.level=0.99,
+      alternative = "greater")))
+  
+  df_res$pval.ttest[i] <- df_ttest$p.value
+}
+
+
+
+# Add comparison between Cmp58 addition/no addition 
+Cmp58_strains <- 
+  tbl_plot_mean_3h %>% 
+  filter(strain != "ASC201") %>% 
+  filter(!induction %in% c("none", "1 nM Cmp1", "10 mM prop.")) %>% 
+  mutate(induction = as.character(induction)) %>% 
+  mutate(strain_ind = paste0(strain,"_",induction)) %>% 
+  select(strain_ind, strain, induction) %>% 
+  distinct() 
+
+df_res_Cmp58 <- tibble(strain_ind = paste0(Cmp58_strains$strain_ind,"_propComp"),
+                 pval.ttest = rep(NA,length(Cmp58_strains$strain_ind)))
+
+
+# loop through all strains and run one-sided t-test
+# compare propionate with and without allosteric modulator
+# One-sided "less" due to order of comparison being reversed
+for (i in 1:length(Cmp58_strains$strain_ind)) {
+  df_strain <- tbl_plot_mean_3h %>% 
+  filter(!induction %in% c("none", "1 nM Cmp1")) %>% 
+    mutate(induction = as.character(induction)) %>% 
+    filter(strain == Cmp58_strains$strain[i])
+  
+  df_induc <- 
+    df_strain %>% 
+    filter(induction %in% c("10 mM prop.",Cmp58_strains$induction[i])) %>% 
+    mutate(induction = as.factor(induction)) %>%
+    group_by(induction) 
+
+  #paired t-test
+  #
+  df_ttest <- 
+    as_tibble(df_induc) %>% 
+    summarize(tidy(t.test(
+      GFP_ODnorm~induction, 
+      paired=TRUE, 
+      conf.level=0.99,
+      alternative = "less")))
+  
+  df_res_Cmp58$pval.ttest[i] <- df_ttest$p.value
+}
+
+#Summarize the p-value results
+df_res_final <-
+  rbind(df_res, df_res_Cmp58)
+
+#Save results as csv
+write_csv(df_res_final, file = "Figures/t-test_BarDot")
+
+# Add comparison between baselines in the uninduced state (anova)
+baseline_strains <- 
+  tbl_plot_mean_3h %>% 
+  filter(strain != "ASC201") %>% 
+  filter(induction %in% c("none")) %>% 
+  mutate(induction = as.character(induction)) %>% 
+  mutate(strain_ind = paste0(strain,"_",induction)) %>% 
+  select(strain_ind, strain, induction) %>% 
+  distinct() 
+
+df_res_base <- tibble(strain_ind = baseline_strains$strain_ind,
+                 pval.anova = rep(NA,length(baseline_strains$strain_ind)))
+
+df_strain <- tbl_plot_mean_3h %>% 
+  filter(induction %in% c("none")) %>% 
+  mutate(induction = as.character(induction)) %>% 
+  group_by(strain)
+  
+  #anova 
+  df_anova <- 
+    as_tibble(df_strain) %>% 
+    reframe(tidy(aov(GFP_ODnorm~strain)))
+
+
+
+#Save results as csv
+write_csv(df_anova, file = "Figures/Anova_BarDot_baseline")
+
+```
+
+
+##Generate plots for publication
+```{r}
+
+tbl_plot_induction <- 
+  tbl_plot_mean %>% 
+  filter(time_h < 10) %>% 
+  filter(strain != "ASC201") %>% 
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>%   
+  ggplot(aes(x = time_h, y = GFP_ODnorm_mean, group = group_rep2, color = induction)) + 
+  geom_ribbon(aes(ymin = GFP_ODnorm_mean - GFP_ODnorm_sd,
+                  ymax = GFP_ODnorm_mean + GFP_ODnorm_sd,
+                  fill = induction),
+              alpha =0.3,
+              color = NA) +
+  geom_line(size = 1) +
+  facet_wrap(vars(strain)) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 0.6) +
+  xlab("Time [h]") +
+  ylab("GFP / OD600 (a.u.)") 
+
+ggsave(tbl_plot_induction, filename = "FiguresNew/timelineInducG-prot.pdf",height = 4)
+
+p_bar <-
+  tbl_plot_mean_3h %>% 
+  filter(strain != "ASC201") %>%
+  mutate(group_rep2 = paste0(strain,"_",induction)) %>% 
+  mutate(group_rep2 = as.factor(group_rep2)) %>% 
+  ggplot(aes(x = strain, y=GFP_ODnorm_mean, fill = induction, group = induction)) +
+    geom_bar(
+    aes(fill = induction),
+    position = "dodge",
+    stat = "summary",
+    fun = "mean"
+  ) +
+  geom_point(
+    aes(y = GFP_ODnorm, 
+        group = induction),
+    size = 0.5,
+    color = "black",
+    position = position_dodge2(width = 0.9)
+  ) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  ylim(0,4) +
+  xlab("Strain") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Induction at 3 h of incubation")
+  
+p_bar
+
+ggsave(p_bar, filename = "FiguresNew/BarDot-FFA2.pdf",height = 4)
+```
+
+
+##Look into if there is any transient activation of GFP in the negative control strain
+```{r}
+tbl_plot_mean_cont <- 
+  tbl_plot_mean  %>% 
+  filter(induction == "none")
+
+p_bar_cont_transient <-
+  tbl_plot_mean_cont %>% 
+  ggplot(aes(x = time_h, y=GFP_ODnorm_mean)) +
+    geom_bar(
+    aes(fill = time_h),
+    position = "dodge",
+    stat = "summary",
+    fun = "mean"
+  ) +
+  geom_point(
+    aes(y = GFP_ODnorm),
+    size = 0.5,
+    color = "black"
+  ) +
+  facet_wrap(vars(strain),nrow = 1) +
+  scale_color_viridis(discrete = F,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = F,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  xlab("Time") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Transient induction for control contition")
+  
+p_bar_cont_transient
+
+
+
+
+# Look into if there is significant difference between t=0 and t=3 for the control
+cont_strain <- 
+  tbl_plot_mean %>% 
+  filter(strain != "ASC201") %>% 
+  filter(induction == "none") %>% 
+  #mutate(time_h = as.character(time_h)) %>% 
+  mutate(strain_h = paste0(strain,"_",time_h)) %>% 
+  select(strain_h, strain, time_h, GFP_ODnorm, GFP_ODnorm_mean) %>% 
+  distinct() %>% 
+  filter(time_h %in% c("0.04218","1.04307","2.04392","3.04498", "4.04564")) 
+
+
+
+
+# Plot data to check
+p_bar_cont_check <-
+  cont_strain %>% 
+  ggplot(aes(x = time_h, y=GFP_ODnorm)) +
+    geom_bar(
+    aes(fill = time_h, group = time_h),
+    position = "dodge",
+    stat = "summary",
+    fun = "mean"
+  ) +
+  geom_point(
+    aes(y = GFP_ODnorm),
+    size = 0.5,
+    color = "black"
+  ) +
+  facet_wrap(vars(strain),nrow = 1) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1) +
+  xlab("Time") +
+  ylab(expression("GFP/OD600 [a.u.]")) +
+  ggtitle("Transient induction for control contition")
+  
+p_bar_cont_check
+
+
+
+  df_ttest <- 
+    cont_strain %>% 
+    filter(strain == "ASC4G1-3") %>% 
+    filter(time_h %in% c("0.04218","3.04498")) %>% 
+    as_tibble() %>%
+    summarize(tidy(t.test(
+      GFP_ODnorm~time_h, 
+      paired=TRUE, 
+      conf.level=0.99,
+      alternative = "less"
+      )))
+
+```
+
+
+
+

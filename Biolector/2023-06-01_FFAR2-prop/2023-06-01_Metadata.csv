@@ -1,0 +1,97 @@
+﻿well,strain,replicate,induction
+A01,ASC201,1,1 uM Sc-pep
+A02,ASC4G1-3,1,none
+A03,ASC4G2-3,1,none
+A04,ASC4G3-3,1,none
+A05,ASC201,1,10 mM prop.
+A06,ASC4G1-3,1,10 mM prop.
+A07,ASC4G2-3,1,10 mM prop.
+A08,ASC4G3-3,1,10 mM prop.
+B01,ASC201,2,1 uM Sc-pep
+B02,ASC4G1-3,2,none
+B03,ASC4G2-3,2,none
+B04,ASC4G3-3,2,none
+B05,ASC201,2,10 mM prop.
+B06,ASC4G1-3,2,10 mM prop.
+B07,ASC4G2-3,2,10 mM prop.
+B08,ASC4G3-3,2,10 mM prop.
+C01,ASC201,3,1 uM Sc-pep
+C02,ASC4G1-3,3,none
+C03,ASC4G2-3,3,none
+C04,ASC4G3-3,3,none
+C05,ASC201,3,10 mM prop.
+C06,ASC4G1-3,3,10 mM prop.
+C07,ASC4G2-3,3,10 mM prop.
+C08,ASC4G3-3,3,10 mM prop.
+D01,ASC201,1,10 mM prop. + 1 nM Cmp58
+D02,ASC4G1-3,1,10 mM prop. + 1 nM Cmp58
+D03,ASC4G2-3,1,10 mM prop. + 1 nM Cmp58
+D04,ASC4G3-3,1,10 mM prop. + 1 nM Cmp58
+D05,ASC201,1,1 nM Cmp1
+D06,ASC4G1-3,1,1 nM Cmp1
+D07,ASC4G2-3,1,1 nM Cmp1
+D08,ASC4G3-3,1,1 nM Cmp1
+E01,ASC201,2,10 mM prop. + 1 nM Cmp58
+E02,ASC4G1-3,2,10 mM prop. + 1 nM Cmp58
+E03,ASC4G2-3,2,10 mM prop. + 1 nM Cmp58
+E04,ASC4G3-3,2,10 mM prop. + 1 nM Cmp58
+E05,ASC201,2,1 nM Cmp1
+E06,ASC4G1-3,2,1 nM Cmp1
+E07,ASC4G2-3,2,1 nM Cmp1
+E08,ASC4G3-3,2,1 nM Cmp1
+F01,ASC201,3,10 mM prop. + 1 nM Cmp58
+F02,ASC4G1-3,3,10 mM prop. + 1 nM Cmp58
+F03,ASC4G2-3,3,10 mM prop. + 1 nM Cmp58
+F04,ASC4G3-3,3,10 mM prop. + 1 nM Cmp58
+F05,ASC201,3,1 nM Cmp1
+F06,ASC4G1-3,3,1 nM Cmp1
+F07,ASC4G2-3,3,1 nM Cmp1
+F08,ASC4G3-3,3,1 nM Cmp1
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,
+,,,

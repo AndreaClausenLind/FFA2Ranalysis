@@ -1,0 +1,589 @@
+---
+title: "R Notebook"
+author: "Andrea Clausen Lind"
+date: "2023-12-29"
+output: html_notebook
+---
+
+
+## Load libraries
+```{r, echo=FALSE}
+#library(flowCore)
+library(tidyverse)
+library(viridis)
+#library(hrbrthemes)
+library(hexbin)
+library(ggridges)
+#library(patchwork)
+library(ggtext)
+library(ggpubr)
+library(scales)
+library(minpack.lm)
+filter <- dplyr::filter
+select <- dplyr::select
+```
+
+
+## Load data
+```{r, }
+list.files("./")
+path_csv = "./2024-03-08/2024-03-08_at_04-08-58pm/"
+name_sub = "2024-03-08_at_04-08-58pm."
+path_meta = "./Metadata_p1_240308.csv"
+  
+csv_plate1 <-
+  list.files(path_csv, full.names = T) %>% 
+  lapply(., read.delim, sep = ",") 
+
+#summary(csv_plate1)
+
+metadata1 <- read.csv(path_meta, sep = ",") 
+
+```
+
+## Format metadata
+```{r}
+
+metadata_p1 = 
+  tibble(file_id = list.files(path_csv)) %>% 
+  mutate(sample_id = gsub(".CSV","",file_id)) %>% 
+  mutate(well = gsub(name_sub,"",sample_id))
+  
+metadata_p1 <- 
+  merge(metadata_p1, metadata1, by.x = "well", by.y = "well") %>% 
+  select(-sample_id, -file_id, -well_id)  
+  
+head(metadata_p1)
+
+
+```
+
+## Convert the csv data into a tidy tibble
+```{r}
+# initialize empty data frame
+df_flow_p1 = data.frame()
+
+# Get no. of files
+no_files = length(csv_plate1)
+
+# loop through all files and add each file data to empty data frame
+for (i in 1:no_files) {
+  
+  # Extract file name
+  well = metadata_p1$well[i]
+  
+  # Convert data to tibble and add file name
+  file_data =
+    csv_plate1[[i]] %>% 
+    as_tibble() %>% 
+    mutate(WELL = well)
+  
+  # Join with empty data frame
+  df_flow_p1 = rbind(df_flow_p1,file_data)
+}
+
+head(df_flow_p1)
+head(metadata_p1)
+
+```
+
+
+## Join with metadata, add row signifying plate, and join datasets
+```{r}
+
+df_full = 
+  df_flow_p1 %>% 
+  full_join(metadata_p1,by = c("WELL" = "well")) %>% 
+  select(-X, -P01.yeast, -strain, -WELL) 
+
+
+head(df_full)
+tail(df_full)
+```
+
+##Plot cell size and granularity to determine cutoffs
+```{r}
+
+p_density_FSC =
+  df_full %>% 
+  mutate(az_cmp58 = paste0(AZ1729_uM, "_", cmp58_uM)) %>%
+  ggplot(aes(FSC.HLog, color = az_cmp58, fill = az_cmp58)) +
+  geom_density(alpha = 0.1, adjust = 0.0001, linewidth=0.4) +
+  facet_wrap(vars(az_cmp58),nrow = 4) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  xlab("FSC (a.u., log-scale)") +
+  ggtitle("FSC.HLog. Depending on AZ1728[uM]_cmp58[uM]") +
+  theme(aspect.ratio = 0.5)
+
+p_density_FSC
+
+p_density_SSC =
+  df_full %>% 
+  mutate(az_cmp58 = paste0(AZ1729_uM, "_", cmp58_uM)) %>%
+  ggplot(aes(SSC.HLog, color = az_cmp58, fill = az_cmp58)) +
+  geom_density(alpha = 0.1, adjust = 0.0001, linewidth=0.4) +
+  facet_wrap(vars(az_cmp58),nrow = 4) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  xlab("SSC (a.u., log-scale)") +
+  ggtitle("SSC.HLog depending on AZ1728[uM]_cmp58[uM]") +
+  theme(aspect.ratio = 0.5)
+
+p_density_SSC
+
+p_hexbin =
+  df_full %>% 
+  mutate(az_cmp58 = paste0(AZ1729_uM, "_", cmp58_uM)) %>%
+  ggplot(aes(x = FSC.HLog, y = SSC.HLog)) +
+  stat_bin_hex(bins = 90) +
+  facet_wrap(vars(az_cmp58),nrow = 4) +
+  scale_color_viridis(discrete = F,direction = -1, option = "A",begin = 0.2, end=0.7) +
+  scale_fill_viridis(discrete = F,direction = -1, option = "A",begin = 0.2, end=0.7) +
+  theme_bw() +
+  xlab("FSC (a.u., log-scale)") +
+  ylab("SSC (a.u., log-scale)") +
+  ggtitle("FSC vs SSC depending on AZ1728[uM]_cmp58[uM]. Raw data") +
+  theme(aspect.ratio = 0.5) 
+
+p_hexbin
+
+
+```
+##Save plots
+```{r,eval = F, fig.width=12}
+ggsave(p_density_FSC, filename = "Figures/DensityFSC_raw.pdf",width = 15)
+ggsave(p_density_SSC, filename = "Figures/DensitySSC_raw.pdf",width = 15)
+ggsave(p_hexbin, filename = "Figures/HexbinFSC-SSC_raw.pdf",width = 15)
+
+
+```
+
+
+##Filter out cells below FSC and SSC threshold 
+```{r}
+df_full =
+  df_full %>%
+  filter(GRN.B.HLog > 0) %>%
+  filter(RED.R.HLog > 0.5) %>%
+  filter(FSC.HLog > 2.8) %>% 
+  filter(SSC.HLog < 4.8)
+
+head(df_full)
+```
+
+##Calculate mean and standard deviation
+```{r}
+# Calculate mean and standard deviations of all measurment points, grouping replicates
+df_mean <- 
+  df_full %>% 
+  group_by(AZ1729_uM, cmp58_uM) %>% 
+  mutate(mean_GFP = mean(GRN.B.HLog),
+         sd_GFP = sd(GRN.B.HLog)) %>% 
+  ungroup()
+
+# Calculate mean and standard deviations of all measurement points, per replicate
+df_mean_rep <- 
+  df_mean %>% 
+  group_by(AZ1729_uM, cmp58_uM, replicate) %>% 
+  mutate(mean_GFP_rep = mean(GRN.B.HLog),
+         sd_GFP_rep = sd(GRN.B.HLog)) %>% 
+  ungroup() %>% 
+  select(AZ1729_uM, cmp58_uM, replicate, mean_GFP_rep, sd_GFP_rep) %>% 
+  distinct()
+
+# Calculate mean and standard deviations of means for each replicate
+df_mean_rep_mean <- 
+  df_mean_rep %>% 
+  group_by(AZ1729_uM, cmp58_uM) %>% 
+  mutate(mean_GFP_mean = mean(mean_GFP_rep),
+         sd_GFP_mean = sd(mean_GFP_rep)) %>% 
+  ungroup() 
+
+
+df_mean_rep_mean_full <- 
+  df_mean %>% 
+  group_by(AZ1729_uM, cmp58_uM) %>% 
+  mutate(mean_GFP = mean(GRN.B.HLog),
+         sd_GFP = sd(GRN.B.HLog)) %>% 
+  mutate(mean_GFP_rep = mean(GRN.B.HLog),
+         sd_GFP_rep = sd(GRN.B.HLog)) %>% 
+  mutate(mean_GFP_mean = mean(mean_GFP_rep),
+         sd_GFP_mean = sd(mean_GFP_rep)) %>% 
+  ungroup() %>% 
+  select(AZ1729_uM, cmp58_uM, replicate, mean_GFP_rep, sd_GFP_rep, GRN.B.HLog, mean_GFP_mean, sd_GFP_mean) %>%
+  distinct()
+
+head(df_full)
+head(df_mean_rep_mean)
+```
+
+## Normalize Data 
+Fold-change over baseline mean for each replicate
+```{r}
+
+# Calculate fold change (FC) over baseline for all measurement point per replicate 
+df_mean_rep_FC <- 
+  df_mean_rep %>% 
+  mutate(label = paste0(cmp58_uM, "_", AZ1729_uM)) %>% 
+  group_by(replicate) %>% 
+  mutate(mean_GFP_rep_FC = mean_GFP_rep - mean_GFP_rep[label == "0_0"]) %>% 
+  mutate(sd_GFP_rep_FC = sd(mean_GFP_rep_FC)) %>% 
+  ungroup() 
+
+# Calculate mean and standard deviations of means for each replicate
+df_mean_rep_mean_FC <- 
+  df_mean_rep_FC %>% 
+  group_by(cmp58_uM, AZ1729_uM) %>% 
+  mutate(mean_GFP_mean_FC = mean(mean_GFP_rep_FC),
+         sd_GFP_mean_FC = sd(mean_GFP_rep_FC)) %>% 
+  ungroup() 
+
+head(df_mean_rep_mean_FC)
+
+# Test plotting data. Note, adding 0.001 to x-axis values to enable log-scale.
+p_linedot_cmp58_FC =
+  df_mean_rep_mean_FC %>%  
+  filter(AZ1729_uM == 0) %>%
+  select(-AZ1729_uM) %>% 
+  mutate(color="2") %>% 
+  ggplot(aes(
+    x = cmp58_uM+0.001,
+    y = mean_GFP_mean_FC,
+    ymin = mean_GFP_mean_FC - sd_GFP_mean_FC,
+    ymax = mean_GFP_mean_FC + sd_GFP_mean_FC,
+    color = color,
+    fill = color
+  )) +
+  geom_line(linewidth = 1) +
+  #geom_linerange() +
+  geom_point(aes(y=mean_GFP_rep_FC), alpha=0.5) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1, axis.text.x = element_markdown()) +
+  coord_fixed() +
+  scale_x_continuous(trans = log10_trans(),
+                     breaks = trans_breaks("log10", function(x) 10^x),
+                     labels = trans_format("log10", math_format(10^.x))) +
+  #ylim(0.5,2.75) +
+  #xlim(0, 0.25) +
+  ylab("Fold-change GFP (a.u., log-scale)") +
+  xlab("Cmp58 [uM] (log-scale)") + 
+  ggtitle(paste0("GFP activation curve cmp58"))
+
+p_linedot_cmp58_FC
+
+# Try saving to compare to non-normalized data
+ggsave(p_linedot_cmp58_FC, filename = "Figures/LineDot_cmp58_FC.pdf",width = 5)
+```
+
+
+#Make figures for publication.
+From this data set we will make regression curves for cmp58+AZ1729
+
+```{r}
+# Make regression for Cmp58 and AZ1729 from fold change data. 
+# Use 3-parametric sigmoid curves. 
+# Cmp58 REGRESSION
+  df_cmp58_FC <- 
+  df_mean_rep_mean_FC %>% 
+  filter(AZ1729_uM == 0) %>% 
+  mutate(concentration = log10(cmp58_uM*10^-6+10^-9)) %>% 
+  mutate(inducer = "cmp58") 
+
+# Run regression with nlsLM, fitting data to a 4-parameter sigmodial curve 
+levm.fit_cmp58 <- nlsLM(
+  mean_GFP_rep_FC ~
+  Amin + ((Amax - Amin) / (1 + (10^(LogEC50 - concentration))*1)),
+  data = df_cmp58_FC,
+  start = list(Amin = 0, Amax = 2, LogEC50 = -3))
+
+# Show summary of the fit, and save model
+summary(levm.fit_cmp58)
+
+capture.output(summary(levm.fit_cmp58), file = "RegressionModels/RegSum_cmp58.txt")
+saveRDS(levm.fit_cmp58, file = "RegressionModels/Regress_cmp58.rda")
+#readRDS("RegressionModels/Regress_Acetate.rda")
+
+# Add predicted values to data frame 
+df_cmp58_FC$predict <- predict(levm.fit_cmp58)
+
+# Make full regression curve
+concrange_cmp58 <- seq(min(df_cmp58_FC$concentration), max(df_cmp58_FC$concentration), by = 0.001)
+  
+reg_cmp58 <- 
+  data_frame(concentration = concrange_cmp58) %>% 
+  mutate(predict = predict(levm.fit_cmp58, tibble(concentration = concrange_cmp58))) %>% 
+  mutate(inducer = "cmp58")
+
+head(reg_cmp58)  
+
+#Export regression curve
+write.csv(reg_cmp58,"RegressionModels/RegressCurve_cmp58.csv")
+
+
+##################
+# MAKE PROPRIONATE REGRESSION FOR EACH AZ1729 CONCENTRATION
+df_cmp58_az_FC <- 
+  df_mean_rep_mean_FC %>% 
+  mutate(concentration = log10(cmp58_uM*10^-6+10^-9)) %>%  
+  mutate(inducer = "cmp58") %>% 
+  mutate(allosteric_mod = paste0(AZ1729_uM, " uM AZ1729")) 
+
+head(df_cmp58_az_FC)
+
+# Extract the AZ1729 concentrations used
+az_conc <- df_cmp58_az_FC %>% select(allosteric_mod) %>% distinct() %>% pull()
+
+# Create empty data frame for storage
+df_reg_raw_full <- tibble()
+df_reg_pred_full <- tibble()
+
+# Loop across AZ1729 concentrations
+for (conc in az_conc) {
+  df_subset <- 
+    df_cmp58_az_FC %>% 
+    filter(allosteric_mod == conc)
+  
+  levm.fit_conc <- nlsLM(
+    mean_GFP_rep_FC ~
+    Amin + ((Amax - Amin) / (1 + (10^(LogEC50 - concentration))*1)),
+    data = df_subset,
+    start = list(Amin = 0, Amax = 2, LogEC50 = -5))
+
+  df_subset$predict <- predict(levm.fit_conc)
+  
+  summary(levm.fit_conc)
+  
+  df_reg_raw_full <- bind_rows(df_reg_raw_full,df_subset)
+  
+  # Make full regression curve
+  conc_range <- seq(min(df_subset$concentration), max(df_subset$concentration), by = 0.001) 
+  
+  df_reg_pred <- 
+  data_frame(concentration = conc_range) %>% 
+  mutate(predict = predict(levm.fit_conc, tibble(concentration = conc_range))) %>% 
+  mutate(inducer = "cmp58") %>% 
+  mutate(allosteric_mod = conc) 
+  
+  df_reg_pred_full <- bind_rows(df_reg_pred_full,df_reg_pred)
+  
+  #Save summary and model
+  capture.output(summary(levm.fit_conc), file = paste0("RegressionModels/RegSum_cmp58_",conc,".txt"))
+  saveRDS(levm.fit_conc, file = paste0("RegressionModels/Regress_cmp58_",conc,".rda"))
+  write.csv(df_reg_pred,paste0("RegressionModels/RegressCurve_cmp58_",conc,".csv"))
+
+}
+
+# Save data frame with all predicted regression curves and the raw data respectively combined
+write.csv(df_reg_pred_full, paste0("RegressionModels/RegressCurve_cmp58_AZ1729_full.csv"))
+write.csv(df_reg_raw_full, paste0("RegressionModels/RawData_cmp58_AZ1729_full.csv"))
+
+
+# PLOT REGRESSION
+
+# Plot cmp58 alone
+p_linedot_FC_reg_cmp58 <- 
+  df_cmp58_FC %>%  
+  ggplot(aes(
+    x = concentration,
+    color = inducer,
+    fill = inducer
+  )) +
+  geom_line(data = reg_cmp58, aes(y = predict), linewidth = 1) +
+  geom_linerange(aes(y = mean_GFP_mean_FC,
+                     ymin = mean_GFP_mean_FC - sd_GFP_mean_FC,
+                     ymax = mean_GFP_mean_FC + sd_GFP_mean_FC)) +
+  geom_point(aes(y = mean_GFP_mean_FC), size = 1.7,shape = 21, fill = "white") +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 2, axis.text.x = element_markdown()) +
+  coord_fixed() +
+  ylim(-0.1,1.25) +
+  ylab("GFP over baseline (Log−scale))") +
+  xlab("Log10([Cmp58]) M") + 
+  ggtitle(paste0("GFP activation curve cmp58 ")) 
+
+p_linedot_FC_reg_cmp58
+
+
+#Plot cmp58 with different AZ1729 concentrations
+p_linedot_FC_reg_cmp58_az_wide =
+  df_reg_raw_full %>%  
+  ggplot(aes(
+    x = concentration,
+    color = allosteric_mod,
+    fill = allosteric_mod
+  )) +
+  geom_line(data = df_reg_pred_full, aes(y = predict), linewidth = 1) +
+  geom_linerange(aes(y = mean_GFP_mean_FC,
+                     ymin = mean_GFP_mean_FC - sd_GFP_mean_FC,
+                     ymax = mean_GFP_mean_FC + sd_GFP_mean_FC,
+                     group = label)) +
+  geom_point(aes(y = mean_GFP_mean_FC,
+                 group = label), 
+             size = 1.7,
+             shape = 21, 
+             fill = "white") +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1, axis.text.x = element_markdown()) +
+  coord_fixed() +
+  ylim(-0.1,1.25) +
+  ylab("GFP over baseline (Log−scale))") +
+  xlab("Log10([Cmp58]) M") + 
+  ggtitle(paste0("GFP activation curve cmp58 at different AZ1729 conc.")) + 
+  labs(color = "AZ1729 uM", fill = "AZ1729 uM")
+
+p_linedot_FC_reg_cmp58_az_wide
+
+p_linedot_FC_reg_cmp58_az =
+  df_reg_raw_full %>%  
+  ggplot(aes(
+    x = concentration,
+    color = allosteric_mod,
+    fill = allosteric_mod
+  )) +
+  geom_line(data = df_reg_pred_full, aes(y = predict), linewidth = 1) +
+  geom_linerange(aes(y = mean_GFP_mean_FC,
+                     ymin = mean_GFP_mean_FC - sd_GFP_mean_FC,
+                     ymax = mean_GFP_mean_FC + sd_GFP_mean_FC,
+                     group = label)) +
+  geom_point(aes(y = mean_GFP_mean_FC,
+                 group = label), 
+             size = 1.7,
+             shape = 21, 
+             fill = "white") +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.2, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 2, axis.text.x = element_markdown()) +
+  coord_fixed() +
+  ylim(-0.1,1.25) +
+  ylab("GFP over baseline (Log−scale))") +
+  xlab("Log10([Cmp58]) M") + 
+  ggtitle(paste0("GFP activation curve cmp58 at different AZ1729 conc.")) + 
+  labs(color = "AZ1729 uM", fill = "AZ1729 uM")
+
+p_linedot_FC_reg_cmp58_az
+
+```
+
+## Save plot
+```{r,eval = F, fig.width=12}
+
+ggsave(p_linedot_FC_reg_cmp58, filename = "FiguresNew/reg_Cmp58.pdf",height = 4)
+ggsave(p_linedot_FC_reg_cmp58_az, filename = "FiguresNew/reg_Cmp58_AZ1729.pdf",height = 4)
+ggsave(p_linedot_FC_reg_cmp58_az_wide, filename = "FiguresNew/reg_Cmp58_AZ1729_wide.pdf",height = 4)
+
+```
+
+
+## Calculate significace and plot barplot for Cmp58
+```{r}
+
+#PLOT AZ1729 DATA
+p_barpoint_FC_reg <- 
+  df_cmp58_az_FC %>%  
+  mutate(cmp58_uM = as.factor(cmp58_uM),
+         AZ1729_uM = as.factor(as.integer(log10(AZ1729_uM*10^-6+10^-9)))) %>% 
+  ggplot(aes(
+    x = cmp58_uM,
+    y = mean_GFP_mean_FC
+  )) +
+  geom_col(aes(
+    color = AZ1729_uM,
+    fill = AZ1729_uM), 
+    width = 0.4, 
+    position = position_dodge(0.5)) +
+  geom_jitter(aes(y = mean_GFP_rep_FC,
+                 group = AZ1729_uM),
+             alpha = 0.6,
+             size = 0.6,
+             position = position_dodge2(0.5)) +
+  scale_color_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  scale_fill_viridis(discrete = T,direction = -1, option = "A",begin = 0.3, end=0.8) +
+  theme_bw() +
+  theme(aspect.ratio = 1, 
+        axis.text.x = element_markdown()) +
+  coord_fixed() +  
+  ylim(-0.5,1.25) +
+  ylab("GFP over baseline (log-scale)") +
+  xlab("Cmp58 [uM]") + 
+  ggtitle(paste0("GFP activation curve propionate"))+
+  labs(color = "log10([AZ1729]) M", fill = "log10([AZ1729]) M")
+
+p_barpoint_FC_reg
+
+ggsave(p_barpoint_FC_reg, filename = "FiguresNew/barpoint_Cmp58_AZ1729.pdf",height = 4)
+
+#CALCULATE SIGNIFICANCE AZ1729
+conc_prop <-
+  df_cmp58_az_FC %>%
+  select(cmp58_uM) %>% 
+  unique() %>% 
+  as_vector()
+
+conc_AZ1729 <-
+  df_cmp58_az_FC %>%
+  select(AZ1729_uM) %>% 
+  filter(AZ1729_uM != 0) %>% 
+  unique()  %>% 
+  as_vector()
+
+# Make empty frame for p-values
+df_sig_AZ1729 <- 
+  df_cmp58_az_FC %>% 
+  select(cmp58_uM, AZ1729_uM) %>% 
+  filter(AZ1729_uM != 0) %>% 
+  distinct() %>% 
+  arrange(cmp58_uM, AZ1729_uM) %>% 
+  mutate(pval.ttest.oneside = rep(NA, length(conc_prop)*length(conc_AZ1729))) %>% 
+  mutate(pval.ttest.twoside = rep(NA, length(conc_prop)*length(conc_AZ1729))) 
+  
+
+# loop through all concentrations of AZ1729 and run one-sided t-test
+pos = 1
+
+  for (i in 1:(length(df_sig_AZ1729$pval.ttest.oneside))) {
+    df_ind <-
+      df_cmp58_az_FC %>% 
+      filter(cmp58_uM == df_sig_AZ1729$cmp58_uM[i]) %>% 
+      filter(AZ1729_uM %in% c(0, df_sig_AZ1729$AZ1729_uM[i]))
+    
+    #paired t-test
+    df_ttest_oneside <- 
+      as_data_frame(df_ind) %>%
+      summarize(tidy(t.test(
+        mean_GFP_rep_FC~AZ1729_uM,
+        paired=TRUE, 
+        conf.level=0.99,
+        alternative = "less"
+        )))
+    
+    df_sig_AZ1729$pval.ttest.oneside[pos] <- df_ttest_oneside$p.value
+    
+    #paired t-test, one-sided
+    df_ttest_twoside <- 
+      as_data_frame(df_ind) %>%
+      summarize(tidy(t.test(
+        mean_GFP_rep_FC~AZ1729_uM,
+        paired=TRUE, 
+        conf.level=0.99
+        )))
+    
+    df_sig_AZ1729$pval.ttest.twoside[pos] <- df_ttest_twoside$p.value
+    
+    pos = pos+1
+  }
+
+head(df_sig_AZ1729)
+
+write_csv(df_sig_AZ1729, file = "FiguresNew/t-test_Cmp58_AZ1729.csv")
+
+```
